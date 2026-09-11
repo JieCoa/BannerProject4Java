@@ -1,13 +1,23 @@
 # Compiled class file
 *.class
 
+# Maven
+target/
+
 # Log file
 *.log
 
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
 # BlueJ files
 *.ctxt
-
-# Mobile Tools for Java (J2ME)
 .mtj.tmp/
 
 # Package Files #

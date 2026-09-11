@@ -1,0 +1,39 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: banner-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      # 首次启动自动执行建表脚本
+      - ./banner-crm/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - banner-mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    container_name: banner-redis
+    ports:
+      - "6379:6379"
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: banner-kafka
+    # 单节点 KRaft 模式，免 ZooKeeper
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: banner-cluster-0001
+    ports:
+      - "9092:9092"
+
+volumes:
+  banner-mysql-data:

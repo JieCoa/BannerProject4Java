@@ -1,0 +1,21 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: banner-marketing
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: banner-marketing-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2s
+
+banner:
+  local-cache-ttl-seconds: 30

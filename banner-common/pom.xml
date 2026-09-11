@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.banner</groupId>
+        <artifactId>banner-project</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>banner-common</artifactId>
+    <name>banner-common</name>
+    <description>共享实体 / 消息体 / 枚举 / 常量</description>
+
+    <dependencies>
+        <!-- 实体上的 @TableName / @TableId 注解来自 mybatis-plus-annotation, 避免 common 依赖整个 ORM -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-annotation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>

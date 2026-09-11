@@ -1,0 +1,31 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: banner-crm
+  datasource:
+    url: jdbc:mysql://localhost:3306/banner_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # 不写入类型头信息, 消息体就是纯 JSON, 消费端手动反序列化, 跨系统更简单可控
+      properties:
+        spring.json.add.type.headers: false
+      acks: all
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    banner: false
+
+banner:
+  # 定时补偿任务间隔（分钟）：全量重发未过期 banner，解决消息丢失
+  compensate-interval-minutes: 5
