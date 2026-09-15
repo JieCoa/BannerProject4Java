@@ -47,15 +47,18 @@ public class BannerChangeConsumer {
                 return;
             }
 
+            // 必须在 Redis 变更前采集：此时 banner:data:{id} 仍保存旧消息，
+            // 才能同时得到旧业务线/旧日期范围和新业务线/新日期范围的本地缓存 key。
+            var affectedLocalKeys = bannerRedisService.affectedLocalKeys(message);
+
             // 根据 operateType 执行不同的操作
             if (message.getOperateType() == OperateType.DELETE) {
                 bannerRedisService.applyDelete(message);
             } else {
                 bannerRedisService.applyCreateOrUpdate(message);
             }
-            // banner 数据变化后，把受影响的本地缓存条目失效，用户端立即看到最新数据
-            // affectedLocalKeys() 方法返回一个 Set<String>，表示受影响的本地缓存条目的 key。
-            bannerRedisService.affectedLocalKeys(message).forEach(localCache::invalidate);
+            // banner 数据变化后，把新旧范围涉及的本地缓存条目统一失效，用户端立即看到最新数据
+            affectedLocalKeys.forEach(localCache::invalidate);
             log.info("消息消费成功 operateType={} bannerId={} version={}",
                     message.getOperateType(), message.getId(), message.getVersion());
         } catch (Exception e) {
