@@ -34,6 +34,7 @@ public class BannerMessage {
     /** 版本号（= banner_info.version），乱序消息按此比较，旧消息直接丢弃 */
     private Long version;
 
+    /** of 是一个静态工厂方法，用于创建 BannerMessage 对象 */
     public static BannerMessage of(OperateType operateType, BannerInfo banner, String bizCode) {
         BannerMessage msg = new BannerMessage();
         msg.setMessageId(java.util.UUID.randomUUID().toString());

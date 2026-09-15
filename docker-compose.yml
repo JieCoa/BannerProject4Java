@@ -3,10 +3,10 @@ services:
     image: mysql:8.0
     container_name: banner-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_ROOT_PASSWORD: 123
       TZ: Asia/Shanghai
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       # 首次启动自动执行建表脚本
       - ./banner-crm/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro

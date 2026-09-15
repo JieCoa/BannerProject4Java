@@ -8,8 +8,10 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * banner 信息，对应表 banner_info。
+ * banner 信息，对应表 banner_info，MyBatis-Plus 的映射注解。
  * 商家在 [startTime, endTime] 时间段内投放活动宣传图，用户点击后跳转 jumpUrl。
+ * 
+ * @Data - 表示这是一个 POJO（只有字段 + getter/setter，无业务逻辑的贫血模型）
  */
 @Data
 @TableName("banner_info")

@@ -42,11 +42,12 @@ public class BannerRedisService {
             BannerMessage old = objectMapper.readValue(oldJson, BannerMessage.class);
             removeDayEntries(old);
         }
-        // 2. 写入新的覆盖天数
+        // 2. 写入新的覆盖天数，put 方法：key, field 和 value 三个参数
         String json = objectMapper.writeValueAsString(message);
         for (var day : BannerConstants.coveredDays(message.getStartTime(), message.getEndTime())) {
             String key = BannerConstants.bannerDayKey(message.getBizCode(), day);
             redisTemplate.opsForHash().put(key, String.valueOf(message.getId()), json);
+            // 设置过期时间
             redisTemplate.expireAt(key, expireAt(day));
         }
         // 3. 记录最新数据（无 TTL，作为乱序比较与旧数据回滚的依据）
@@ -63,16 +64,19 @@ public class BannerRedisService {
             removeDayEntries(objectMapper.readValue(oldJson, BannerMessage.class));
         }
         removeDayEntries(message);
-        // 墓碑：防止乱序/重复的旧消息把已删 banner 复活
+        // 墓碑：防止乱序/重复的旧消息把已删 banner 复活。墓碑不会永久存在，而是保留一段时间，例如 24 小时。
+        //      这样可以防止短时间内的乱序消息复活数据，同时避免墓碑永久占用 Redis。
         redisTemplate.opsForValue().set(
                 BannerConstants.BANNER_TOMB_PREFIX + message.getId(),
                 String.valueOf(message.getVersion()),
                 java.time.Duration.ofHours(BannerConstants.TOMBSTONE_TTL_HOURS));
+        
+        // 
         redisTemplate.delete(BannerConstants.BANNER_DATA_PREFIX + message.getId());
         log.info("Redis 删除 bannerId={} bizCode={}", message.getId(), message.getBizCode());
     }
 
-    /** 读取某业务线某天缓存的所有 banner 消息（HGETALL） */
+    /** 读取某业务线某天缓存的所有 banner 消息（Redis 的 HGETALL 操作） */
     public List<BannerMessage> loadDay(String bizCode, java.time.LocalDate day) throws Exception {
         var entries = redisTemplate.<String, String>opsForHash()
                 .entries(BannerConstants.bannerDayKey(bizCode, day));
@@ -83,8 +87,9 @@ public class BannerRedisService {
         return result;
     }
 
-    /** 乱序防护用的版本比较：返回已存储的版本号（无数据/有墓碑时返回 Long.MAX_VALUE 拦截旧消息） */
+    /** 乱序防护用的版本比较：返回已存储的版本号（无数据时返回 Long.MIN_VALUE；有墓碑时返回墓碑版本） */
     public long storedVersion(Long bannerId) {
+        // 如果墓碑存在，就返回墓碑版本
         String tomb = redisTemplate.opsForValue().get(BannerConstants.BANNER_TOMB_PREFIX + bannerId);
         if (tomb != null) {
             return Long.parseLong(tomb);
@@ -126,6 +131,7 @@ public class BannerRedisService {
         return bizCode + ":" + day;
     }
 
+    /** 设置过期时间 */
     private java.util.Date expireAt(java.time.LocalDate day) {
         return java.util.Date.from(day.plusDays(1).atStartOfDay(BannerConstants.SHANGHAI).toInstant());
     }

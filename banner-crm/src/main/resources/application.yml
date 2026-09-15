@@ -5,15 +5,17 @@ spring:
   application:
     name: banner-crm
   datasource:
-    url: jdbc:mysql://localhost:3306/banner_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    url: jdbc:mysql://localhost:3307/banner_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
     username: root
-    password: root123
+    password: 123
     driver-class-name: com.mysql.cj.jdbc.Driver
   kafka:
     bootstrap-servers: localhost:9092
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # 已经在 BannerProducer 中手动将对象转换为 json，不需要再使用 JsonSerializer
+      # value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
       # 不写入类型头信息, 消息体就是纯 JSON, 消费端手动反序列化, 跨系统更简单可控
       properties:
         spring.json.add.type.headers: false

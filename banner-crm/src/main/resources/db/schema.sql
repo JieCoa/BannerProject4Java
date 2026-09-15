@@ -2,6 +2,12 @@
 CREATE DATABASE IF NOT EXISTS banner_db DEFAULT CHARACTER SET utf8mb4;
 USE banner_db;
 
+-- 关键：声明本会话后续 SQL 的字符集为 utf8mb4
+-- 容器首次初始化时，docker-entrypoint 会把本文件通过 mysql 客户端执行，
+-- 若客户端会话默认字符集是 latin1，文件里的中文（UTF-8 字节）会被逐字节
+-- 按 latin1 转码存库，造成乱码（如 "助农苹果节" 存成 "åŠ©å†œæžœèŠ‚"）
+SET NAMES utf8mb4;
+
 -- 业务线表（按商品类别划分）
 CREATE TABLE IF NOT EXISTS business_info (
     id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '业务id',

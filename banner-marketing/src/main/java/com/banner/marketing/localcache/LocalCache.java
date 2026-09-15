@@ -17,10 +17,12 @@ import java.util.List;
  */
 @Component
 public class LocalCache {
-
     private final Cache<String, List<BannerVO>> cache;
 
+    // 从 Spring 配置文件中读取：banner.local-cache-ttl-seconds，默认值为 30 秒。
     public LocalCache(@Value("${banner.local-cache-ttl-seconds:30}") long ttlSeconds) {
+        // expireAfterWrite 表示缓存条目从写入后开始计时，超过指定时间自动过期。
+        // maximumSize 表示缓存的最大条目数，超过该数量后会根据 LRU 策略删除最久未使用的条目。
         this.cache = Caffeine.newBuilder()
                 .expireAfterWrite(Duration.ofSeconds(ttlSeconds))
                 .maximumSize(10_000)

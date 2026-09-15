@@ -28,7 +28,7 @@ public class BannerQueryService {
     private final BannerRedisService bannerRedisService;
     private final LocalCache localCache;
 
-    /** 查询某业务线"此刻"可见的 banner 列表（已按 sort 升序） */
+    /** 查询某业务线 "此刻" 可见的 banner 列表（已按 sort 升序） */
     public List<BannerVO> listVisibleBanners(String bizCode) {
         LocalDate today = LocalDate.now(BannerConstants.SHANGHAI);
         String localKey = BannerRedisService.localKey(bizCode, today);
@@ -54,6 +54,7 @@ public class BannerQueryService {
             return bannerRedisService.loadDay(bizCode, today).stream()
                     // 只保留"此刻"在生效期内的 banner
                     .filter(msg -> !now.isBefore(msg.getStartTime()) && !now.isAfter(msg.getEndTime()))
+                    // nullsLast() 表示如果 sort 是 null，把它放到最后；naturalOrder() 表示使用自然顺序
                     .sorted(Comparator.comparing(BannerMessage::getSort,
                             Comparator.nullsLast(Comparator.naturalOrder())))
                     .map(msg -> new BannerVO(msg.getId(), msg.getTitle(), msg.getImageUrl(),
@@ -61,6 +62,7 @@ public class BannerQueryService {
                     .toList();
         } catch (Exception e) {
             log.error("查询 Redis 缓存失败 bizCode={}", bizCode, e);
+            // 创建的是一个不可修改的空列表
             return List.of();
         }
     }

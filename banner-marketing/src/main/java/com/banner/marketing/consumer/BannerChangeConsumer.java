@@ -47,12 +47,14 @@ public class BannerChangeConsumer {
                 return;
             }
 
+            // 根据 operateType 执行不同的操作
             if (message.getOperateType() == OperateType.DELETE) {
                 bannerRedisService.applyDelete(message);
             } else {
                 bannerRedisService.applyCreateOrUpdate(message);
             }
             // banner 数据变化后，把受影响的本地缓存条目失效，用户端立即看到最新数据
+            // affectedLocalKeys() 方法返回一个 Set<String>，表示受影响的本地缓存条目的 key。
             bannerRedisService.affectedLocalKeys(message).forEach(localCache::invalidate);
             log.info("消息消费成功 operateType={} bannerId={} version={}",
                     message.getOperateType(), message.getId(), message.getVersion());

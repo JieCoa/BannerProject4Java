@@ -25,6 +25,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class BannerService {
 
+    /** 
+     * 虽然字段的声明类型是接口类型，但实际保存的是 MyBatis-Plus 创建的代理对象。
+     */
     private final BannerMapper bannerMapper;
     private final BusinessMapper businessMapper;
     private final BannerProducer bannerProducer;
@@ -38,6 +41,7 @@ public class BannerService {
         validateBusiness(banner.getBizId());
         validateTimeRange(banner);
         banner.setVersion(System.currentTimeMillis());
+        // 传入的 banner 对象在执行成功后通常已经被回填了 id
         bannerMapper.insert(banner);
         sendAfterCommit(OperateType.CREATE, banner);
         return banner;
@@ -86,6 +90,13 @@ public class BannerService {
 
     /** banner 列表（可按业务过滤） */
     public List<BannerInfo> list(Long bizId) {
+        /** 
+         * MyBatis-Plus 查询条件构造器: 用 Java 代码拼接 SQL 的 WHERE 和 ORDER BY，而不需要自己写 SQL。
+         * 
+         * 1. eq(bizId != null, BannerInfo::getBizId, bizId)：如果 bizId 不为 null，则添加 WHERE biz_id = bizId 条件。
+         * 2. orderByAsc(BannerInfo::getSort)：按照 sort 字段升序排序。
+         * 3. orderByDesc(BannerInfo::getVersion)：按照 version 字段降序排序。
+        */
         LambdaQueryWrapper<BannerInfo> wrapper = new LambdaQueryWrapper<BannerInfo>()
                 .eq(bizId != null, BannerInfo::getBizId, bizId)
                 .orderByAsc(BannerInfo::getSort)
@@ -99,9 +110,11 @@ public class BannerService {
                 .ge(BannerInfo::getEndTime, LocalDateTime.now()));
     }
 
+    /** 先确保数据库事务提交成功，再发送 Kafka 的 Banner 变更消息 */
     private void sendAfterCommit(OperateType operateType, BannerInfo banner) {
         TransactionSynchronizationHelper.afterCommit(() -> {
             String bizCode = resolveBizCode(banner.getBizId());
+            // 先把消息对象转换成 JSON，再发送到 Kafka
             bannerProducer.send(BannerMessage.of(operateType, banner, bizCode));
         });
     }
