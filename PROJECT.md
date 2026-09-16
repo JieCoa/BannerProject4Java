@@ -39,6 +39,7 @@
 | D8 | Kafka 消息为纯 JSON（关闭类型头），消费端手动 Jackson 解析 | 跨系统解耦，避免反序列化配置坑 |
 | D9 | 消息幂等：消息体预留 messageId，显式去重标 TODO（需求 3.1） | 当前靠 version 比对保证重复消费结果不变 |
 | D10 | 消费消息时先采集旧范围与新范围对应的 localCache key，再执行 Redis 变更 | Banner 修改有效日期或业务线时，同时失效旧、新本地缓存，避免旧 key 的本地缓存继续返回过期数据 |
+| D11 | Banner 定向用户名单独立存储：MySQL 每行最多 1000 个 userId，Kafka 不携带名单，营销系统按 bannerId 回源 CRM | 控制消息体大小；Redis 使用 Set 分桶 + bucket 索引，查询时先按时间再按 userId 过滤；空名单表示所有用户可见 |
 
 ## 4. 待办
 
@@ -48,6 +49,7 @@
 - [ ] 全局异常处理：目前参数错误直接抛 `IllegalArgumentException`（返回 500），加 `@RestControllerAdvice` 转 400
 - [ ] （可选）单元测试：优先覆盖 `BannerRedisService` 的乱序 / 墓碑逻辑
 - [ ] 增加缓存失效测试：验证 banner 修改业务线或有效日期时，旧、新范围对应的 localCache key 都会失效
+- [ ] 增加用户定向测试：验证空名单全量可见、指定 userId 可见性、MySQL/Redis 1000 条分片和 banner 更新删除后的 Redis 桶清理
 
 ## 5. 风险
 
@@ -60,6 +62,8 @@
 | schema.sql 仅在 MySQL 首次建卷时自动执行 | 改表结构不生效 | `docker compose down -v` 重建卷，或手动执行 DDL |
 | localCache 失效范围依赖 Redis 中的旧消息 | 若旧 `banner:data:{id}` 已过期或不存在，无法计算旧范围；旧 Hash 数据可能仍需依赖 TTL/补偿清理 | 当前 `banner:data` 无 TTL；后续增加对账任务或保存 banner 历史范围 |
 | PowerShell 5.1 中 `curl` 是 Invoke-WebRequest 别名 | 验证命令失败 | 命令统一用 `curl.exe` |
+| 营销系统通过 HTTP 回源 CRM 获取名单 | 消费吞吐受 CRM 接口、网络和名单大小影响；接口失败会导致定向缓存未更新 | 增加超时、重试、监控；当前示例实现先保持链路简单 |
+| Redis audience bucket 更新不是事务 | 更新过程中查询可能读到旧桶或部分新桶 | 先删除旧桶再写新桶；后续可用版本化索引或 Lua/双版本切换 |
 
 ## 6. 下一步
 
@@ -98,4 +102,5 @@
    ```
 
 4. 编写并运行缓存失效测试：验证 banner 修改业务线或有效日期时，旧、新范围对应的 localCache key 都会失效；完成后勾掉「待办」中的缓存失效测试项。
-5. 联调通过后：勾掉「待办」第 1 项与「当前状态」的联调行，把验证中发现的问题补进「待办」/「风险」。
+5. 编写并运行用户定向测试：验证空名单、指定 userId、1000 条分片、更新/删除后的桶清理；完成后勾掉「待办」中的用户定向测试项。
+6. 联调通过后：勾掉「待办」第 1 项与「当前状态」的联调行，把验证中发现的问题补进「待办」/「风险」。

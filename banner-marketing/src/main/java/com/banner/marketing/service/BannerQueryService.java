@@ -2,6 +2,7 @@ package com.banner.marketing.service;
 
 import com.banner.common.constant.BannerConstants;
 import com.banner.common.message.BannerMessage;
+import com.banner.marketing.cache.BannerAudienceRedisService;
 import com.banner.marketing.cache.BannerRedisService;
 import com.banner.marketing.localcache.LocalCache;
 import com.banner.marketing.vo.BannerVO;
@@ -26,12 +27,14 @@ import java.util.List;
 public class BannerQueryService {
 
     private final BannerRedisService bannerRedisService;
+    private final BannerAudienceRedisService audienceRedisService;
     private final LocalCache localCache;
 
     /** 查询某业务线 "此刻" 可见的 banner 列表（已按 sort 升序） */
-    public List<BannerVO> listVisibleBanners(String bizCode) {
+    public List<BannerVO> listVisibleBanners(String bizCode, Long userId) {
         LocalDate today = LocalDate.now(BannerConstants.SHANGHAI);
-        String localKey = BannerRedisService.localKey(bizCode, today);
+        // 用户定向结果不能共用同一个本地缓存 key，否则一个用户的结果可能泄露给另一个用户
+        String localKey = BannerRedisService.localKey(bizCode, today) + ":user:" + (userId == null ? "anonymous" : userId);
 
         // 1. 本地缓存命中直接返回（微秒级，扛住高并发）
         List<BannerVO> cached = localCache.get(localKey);
@@ -41,19 +44,21 @@ public class BannerQueryService {
         }
 
         // 2. 回源 Redis
-        List<BannerVO> result = loadFromRedis(bizCode, today);
+        List<BannerVO> result = loadFromRedis(bizCode, today, userId);
 
         // 3. 最新查询结果放入 localCache
         localCache.put(localKey, result);
         return result;
     }
 
-    private List<BannerVO> loadFromRedis(String bizCode, LocalDate today) {
+    private List<BannerVO> loadFromRedis(String bizCode, LocalDate today, Long userId) {
         LocalDateTime now = LocalDateTime.now(BannerConstants.SHANGHAI);
         try {
             return bannerRedisService.loadDay(bizCode, today).stream()
-                    // 只保留"此刻"在生效期内的 banner
+                    // 先按当前时间筛选，再按 userId 过滤定向 banner；名单为空表示所有用户可见
                     .filter(msg -> !now.isBefore(msg.getStartTime()) && !now.isAfter(msg.getEndTime()))
+                    .filter(msg -> userId == null || !audienceRedisService.hasAudience(msg.getId())
+                            || audienceRedisService.contains(msg.getId(), userId))
                     // nullsLast() 表示如果 sort 是 null，把它放到最后；naturalOrder() 表示使用自然顺序
                     .sorted(Comparator.comparing(BannerMessage::getSort,
                             Comparator.nullsLast(Comparator.naturalOrder())))

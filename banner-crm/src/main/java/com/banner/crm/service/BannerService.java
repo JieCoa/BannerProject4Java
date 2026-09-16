@@ -31,6 +31,7 @@ public class BannerService {
     private final BannerMapper bannerMapper;
     private final BusinessMapper businessMapper;
     private final BannerProducer bannerProducer;
+    private final BannerAudienceService audienceService;
 
     /** 新增 banner */
     @Transactional
@@ -43,6 +44,7 @@ public class BannerService {
         banner.setVersion(System.currentTimeMillis());
         // 传入的 banner 对象在执行成功后通常已经被回填了 id
         bannerMapper.insert(banner);
+        audienceService.replace(banner.getId(), banner.getUserIds(), banner.getVersion());
         sendAfterCommit(OperateType.CREATE, banner);
         return banner;
     }
@@ -65,6 +67,10 @@ public class BannerService {
         // 关键：updateById 是局部更新，必须回查完整行发消息，
         // 否则请求里为 null 的字段(如只改 title 时)会以 null 覆盖 Redis 中的 jumpUrl 等完整数据
         BannerInfo fresh = bannerMapper.selectById(banner.getId());
+        if (banner.getUserIds() != null) {
+            // null 表示本次未修改定向名单；空 Set 表示清空名单，即所有用户可见
+            audienceService.replace(fresh.getId(), banner.getUserIds(), fresh.getVersion());
+        }
         sendAfterCommit(OperateType.UPDATE, fresh);
         return fresh;
     }
@@ -85,6 +91,7 @@ public class BannerService {
             return;
         }
         bannerMapper.deleteById(id);
+        audienceService.replace(id, java.util.Set.of(), db.getVersion());
         sendAfterCommit(OperateType.DELETE, db);
     }
 

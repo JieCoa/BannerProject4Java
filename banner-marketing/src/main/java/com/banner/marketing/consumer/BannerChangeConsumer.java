@@ -3,7 +3,9 @@ package com.banner.marketing.consumer;
 import com.banner.common.constant.BannerConstants;
 import com.banner.common.enums.OperateType;
 import com.banner.common.message.BannerMessage;
+import com.banner.marketing.cache.BannerAudienceRedisService;
 import com.banner.marketing.cache.BannerRedisService;
+import com.banner.marketing.client.BannerAudienceClient;
 import com.banner.marketing.localcache.LocalCache;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +28,8 @@ import org.springframework.stereotype.Component;
 public class BannerChangeConsumer {
 
     private final BannerRedisService bannerRedisService;
+    private final BannerAudienceClient audienceClient;
+    private final BannerAudienceRedisService audienceRedisService;
     private final LocalCache localCache;
     private final ObjectMapper objectMapper;
 
@@ -54,11 +58,13 @@ public class BannerChangeConsumer {
             // 根据 operateType 执行不同的操作
             if (message.getOperateType() == OperateType.DELETE) {
                 bannerRedisService.applyDelete(message);
+                audienceRedisService.replace(message.getId(), java.util.Set.of(), message.getVersion());
             } else {
                 bannerRedisService.applyCreateOrUpdate(message);
+                audienceRedisService.replace(message.getId(), audienceClient.fetchUserIds(message.getId()), message.getVersion());
             }
             // banner 数据变化后，把新旧范围涉及的本地缓存条目统一失效，用户端立即看到最新数据
-            affectedLocalKeys.forEach(localCache::invalidate);
+            affectedLocalKeys.forEach(key -> localCache.invalidateByPrefix(key + ":user:"));
             log.info("消息消费成功 operateType={} bannerId={} version={}",
                     message.getOperateType(), message.getId(), message.getVersion());
         } catch (Exception e) {

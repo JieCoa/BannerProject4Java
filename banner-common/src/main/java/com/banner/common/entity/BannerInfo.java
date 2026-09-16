@@ -1,53 +1,35 @@
 package com.banner.common.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.Set;
 
 /**
- * banner 信息，对应表 banner_info，MyBatis-Plus 的映射注解。
- * 商家在 [startTime, endTime] 时间段内投放活动宣传图，用户点击后跳转 jumpUrl。
- * 
- * @Data - 表示这是一个 POJO（只有字段 + getter/setter，无业务逻辑的贫血模型）
+ * banner 信息，对应表 banner_info。
  */
 @Data
 @TableName("banner_info")
 public class BannerInfo {
 
-    /** banner id */
     @TableId(type = IdType.AUTO)
     private Long id;
-
-    /** 所属业务 id（对应 business_info.id） */
     private Long bizId;
-
-    /** 宣传标题 */
     private String title;
-
-    /** 宣传图片地址 */
     private String imageUrl;
-
-    /** 跳转 URL：直播间 / 活动页面 / 商品详情页 */
     private String jumpUrl;
-
-    /** 生效开始时间 */
     private LocalDateTime startTime;
-
-    /** 生效结束时间 */
     private LocalDateTime endTime;
-
-    /** 展示顺序，越小越靠前 */
     private Integer sort;
-
-    /** 版本号（毫秒时间戳），随每次写库递增，用于消息乱序比较 */
     private Long version;
-
-    /** 创建时间 */
     private LocalDateTime createTime;
-
-    /** 更新时间 */
     private LocalDateTime updateTime;
+
+    /** 不落 banner_info 表；CRM 请求使用，实际数据保存在 banner_user_shard */
+    @TableField(exist = false)
+    private Set<Long> userIds;
 }

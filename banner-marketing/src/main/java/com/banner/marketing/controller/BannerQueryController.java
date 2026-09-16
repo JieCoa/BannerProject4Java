@@ -23,7 +23,8 @@ public class BannerQueryController {
 
     /** 例：GET /marketing/banners?bizCode=agri */
     @GetMapping("/banners")
-    public List<BannerVO> listVisibleBanners(@RequestParam String bizCode) {
-        return bannerQueryService.listVisibleBanners(bizCode);
+    public List<BannerVO> listVisibleBanners(@RequestParam String bizCode,
+                                             @RequestParam(required = false) Long userId) {
+        return bannerQueryService.listVisibleBanners(bizCode, userId);
     }
 }

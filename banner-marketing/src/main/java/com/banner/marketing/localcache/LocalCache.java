@@ -43,4 +43,9 @@ public class LocalCache {
     public void invalidate(String key) {
         cache.invalidate(key);
     }
+
+    /** 失效某个业务线/日期下的所有用户查询结果 */
+    public void invalidateByPrefix(String prefix) {
+        cache.asMap().keySet().removeIf(key -> key.startsWith(prefix));
+    }
 }

@@ -19,3 +19,4 @@ spring:
 
 banner:
   local-cache-ttl-seconds: 30
+  crm-base-url: http://localhost:8081
