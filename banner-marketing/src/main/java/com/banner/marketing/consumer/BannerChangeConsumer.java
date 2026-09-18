@@ -6,7 +6,6 @@ import com.banner.common.message.BannerMessage;
 import com.banner.marketing.cache.BannerAudienceRedisService;
 import com.banner.marketing.cache.BannerRedisService;
 import com.banner.marketing.client.BannerAudienceClient;
-import com.banner.marketing.localcache.LocalCache;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +29,6 @@ public class BannerChangeConsumer {
     private final BannerRedisService bannerRedisService;
     private final BannerAudienceClient audienceClient;
     private final BannerAudienceRedisService audienceRedisService;
-    private final LocalCache localCache;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = BannerConstants.BANNER_TOPIC, groupId = "banner-marketing-group")
@@ -51,10 +49,7 @@ public class BannerChangeConsumer {
                 return;
             }
 
-            // 必须在 Redis 变更前采集：此时 banner:data:{id} 仍保存旧消息，
-            // 才能同时得到旧业务线/旧日期范围和新业务线/新日期范围的本地缓存 key。
-            var affectedLocalKeys = bannerRedisService.affectedLocalKeys(message);
-
+            // 本地缓存不走主动失效：非强一致性业务，等 TTL（默认 30s）到期后自动回源 Redis。
             // 根据 operateType 执行不同的操作
             if (message.getOperateType() == OperateType.DELETE) {
                 bannerRedisService.applyDelete(message);
@@ -63,8 +58,6 @@ public class BannerChangeConsumer {
                 bannerRedisService.applyCreateOrUpdate(message);
                 audienceRedisService.replace(message.getId(), audienceClient.fetchUserIds(message.getId()), message.getVersion());
             }
-            // banner 数据变化后，把新旧范围涉及的本地缓存条目统一失效，用户端立即看到最新数据
-            affectedLocalKeys.forEach(key -> localCache.invalidateByPrefix(key + ":user:"));
             log.info("消息消费成功 operateType={} bannerId={} version={}",
                     message.getOperateType(), message.getId(), message.getVersion());
         } catch (Exception e) {

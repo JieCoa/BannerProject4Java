@@ -111,35 +111,6 @@ public class BannerRedisService {
         return message.getVersion() != null && message.getVersion() > storedVersion(message.getId());
     }
 
-    /**
-     * 返回本次消息影响的全部本地缓存 key（旧范围 + 新范围）。
-     * 读取旧数据必须在 applyCreateOrUpdate/applyDelete 删除 data key 之前完成，
-     * 因此消费者应在执行 Redis 变更前调用本方法。
-     */
-    public List<String> affectedLocalKeys(BannerMessage message) {
-        java.util.Set<String> keys = new java.util.HashSet<>();
-        addLocalKeys(keys, message);
-
-        String oldJson = redisTemplate.opsForValue().get(BannerConstants.BANNER_DATA_PREFIX + message.getId());
-        if (oldJson != null) {
-            try {
-                addLocalKeys(keys, objectMapper.readValue(oldJson, BannerMessage.class));
-            } catch (Exception e) {
-                log.warn("解析旧 banner 数据失败，无法清理旧本地缓存 key，bannerId={}", message.getId(), e);
-            }
-        }
-        return new java.util.ArrayList<>(keys);
-    }
-
-    private void addLocalKeys(java.util.Set<String> keys, BannerMessage message) {
-        if (message.getBizCode() == null || message.getStartTime() == null || message.getEndTime() == null) {
-            return;
-        }
-        for (var day : BannerConstants.coveredDays(message.getStartTime(), message.getEndTime())) {
-            keys.add(localKey(message.getBizCode(), day));
-        }
-    }
-
     private void removeDayEntries(BannerMessage message) {
         for (var day : BannerConstants.coveredDays(message.getStartTime(), message.getEndTime())) {
             redisTemplate.opsForHash().delete(BannerConstants.bannerDayKey(message.getBizCode(), day),
