@@ -26,6 +26,15 @@ public class BannerInfo {
     private LocalDateTime endTime;
     private Integer sort;
     private Long version;
+
+    /** Redis 状态字段；banner_info 采用物理删除，因此不落主表 */
+    @TableField(exist = false)
+    private Boolean deleted;
+
+    /** 用户名单分桶数量；不落 banner_info 表，由 CRM 根据名单计算 */
+    @TableField(exist = false)
+    private Integer buckets;
+
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 

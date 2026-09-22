@@ -20,6 +20,20 @@ public class BannerAudienceService {
     public static final int SHARD_SIZE = 1000;
     private final BannerUserShardMapper shardMapper;
 
+    public int bucketCount(Set<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return 0;
+        }
+        long count = userIds.stream().filter(java.util.Objects::nonNull).distinct().count();
+        return (int) ((count + SHARD_SIZE - 1) / SHARD_SIZE);
+    }
+
+    public int bucketCount(Long bannerId) {
+        Long count = shardMapper.selectCount(new LambdaQueryWrapper<BannerUserShard>()
+                .eq(BannerUserShard::getBannerId, bannerId));
+        return count == null ? 0 : count.intValue();
+    }
+
     public void replace(Long bannerId, Set<Long> userIds, long version) {
         shardMapper.delete(new LambdaQueryWrapper<BannerUserShard>()
                 .eq(BannerUserShard::getBannerId, bannerId));

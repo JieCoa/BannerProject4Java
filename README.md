@@ -1,157 +1,297 @@
 # BannerProject4Java
 
-抖音电商平台 banner 模块：商家在指定时间段投放活动宣传图，用户在主页 banner 位看到当前生效的宣传图，点击后跳转到对应链接（直播间 / 活动页 / 商品详情页）。
+抖音电商场景的 Banner 配置与投放示例项目。它把运营配置和用户查询拆成两个独立服务：CRM 负责可靠写入，Marketing 负责消费变更并提供“此刻对当前用户可见”的 Banner。
 
-## 系统架构
+> 本项目只覆盖 Banner 业务，不包含登录、商品、订单和前端页面。`jumpUrl` 由调用方在用户点击 Banner 时跳转到直播间、活动页或商品详情页。
 
+## 1. 解决什么问题
+
+项目演示一条可运行的 Banner 数据链路：
+
+```text
+运营配置
+   │ HTTP CRUD + 可选 userIds
+   ▼
+CRM (:8081)
+   │ MySQL 事务：主数据 + 人群分片 + Outbox
+   │ Kafka banner-topic（纯 JSON，key=bannerId）
+   ▼
+Marketing (:8082)
+   │ Consumer 按 version 防乱序
+   │ Redis 三类 Key + Caffeine localCache
+   ▼
+用户查询
+GET /marketing/banners?bizCode=...&userId=...
 ```
-                          ┌─────────────────────────┐
-      运维人员  ──CRUD──▶  │  banner-crm  (:8081)    │──写──▶ MySQL
-                          │  (CRM 系统)             │──发消息──▶ ┐
-                          └─────────────────────────┘            │
-                             定时补偿任务(每5分钟全量重发)          ▼
-                                                              Kafka: banner-topic
-                                                                   │
-                          ┌─────────────────────────┐            ▼
-      用户  ◀──banner列表── │  banner-marketing(:8082)│◀─消费─ 按version比对
-                          │  (营销系统)             │──写──▶ Redis Hash
-                          └─────────────────────────┘            ▲
-                                     │ localCache miss           │
-                                     └──────── Caffeine 本地缓存 TTL 30s
-```
 
+核心业务规则：
 
+- 没有 `userIds` 的 Banner 对所有用户可见；
+- 有 `userIds` 的 Banner 只对名单中的用户可见；
+- 查询同时检查业务线、当前时间、人群包和 `sort`；
+- CRM 更新、删除必须携带当前 `version`，并发冲突时拒绝覆盖；
+- MySQL 删除是物理删除，但 Redis 保留删除版本，避免迟到的旧消息让 Banner 复活。
 
-## 模块说明
+## 2. 模块与职责
 
+| 模块 | 端口 | 职责 |
+| --- | ---: | --- |
+| `banner-common` | — | 共享实体、消息体、操作枚举和 Redis Key 规则 |
+| `banner-crm` | 8081 | Banner/业务线数据、用户名单分片、乐观锁、Outbox、Kafka 投递与补偿 |
+| `banner-marketing` | 8082 | Kafka 消费、Redis 写入、名单回源、localCache 和用户可见性查询 |
 
-| 模块                 | 说明                                                           |
-| ------------------ | ------------------------------------------------------------ |
-| `banner-common`    | 共享实体（BusinessInfo/BannerInfo）、Kafka 消息体（BannerMessage）、枚举、常量 |
-| `banner-crm`       | CRM 系统（:8081）：运维对 banner/业务线增删改查，写 MySQL，事务提交后发 Kafka        |
-| `banner-marketing` | 营销系统（:8082）：消费 Kafka 写 Redis，提供用户侧查询（localCache -> Redis）    |
+基础设施由 `docker-compose.yml` 提供：
 
+| 服务 | 地址 | 用途 |
+| --- | --- | --- |
+| MySQL 8 | `localhost:3307` | CRM 主数据、名单分片、Outbox |
+| Redis 7 | `localhost:6379` | Marketing 查询缓存 |
+| Kafka 3.9 KRaft | `localhost:9092` | CRM 到 Marketing 的变更事件 |
 
+## 3. 一次变更如何到达用户侧
 
+1. CRM 校验业务线和时间范围，在 MySQL 事务中写入 `banner_info`。
+2. `userIds` 按每 1000 个拆入 `banner_user_shard`；空名单表示全量可见。
+3. 主数据与 `banner_change_outbox` 同事务提交，避免数据库成功但事件丢失。
+4. Outbox 任务投递 Kafka；Kafka 消息不携带完整用户名单，只携带 `buckets`。
+5. Marketing 按 `bannerId` 比较 Redis 中的版本，丢弃旧消息；非删除事件再回源 CRM 获取名单并写入桶。
+6. 用户查询优先从 Caffeine 读取业务日期 Map，未命中时读取 Redis，然后按时间、人群和排序规则过滤。
 
-## Redis 键值设计
+## 4. 数据与缓存设计
 
-业务含义：**"用户在某一天能看到的 banner 集合"**
+### MySQL 表
 
+- `business_info`：业务线，初始化包含 `agri`、`digital`、`clothes`、`beauty`。
+- `banner_info`：Banner 主数据；`version` 是数据库乐观锁版本。
+- `banner_user_shard`：名单分片，每行最多 1000 个 userId。
+- `banner_change_outbox`：可靠投递事件，记录 `CREATE`、`UPDATE`、`DELETE`、重试次数和状态。
 
-| Key                           | 类型     | Value                             | 说明                                                   |
-| ----------------------------- | ------ | --------------------------------- | ---------------------------------------------------- |
-| `banner:{bizCode}:{yyyyMMdd}` | Hash   | field=bannerId, value=banner JSON | 业务线 + 有效时间（按天切分），banner 跨几天就写几个 key，key 过期时间为当天 24 点 |
-| `banner:data:{bannerId}`      | String | 最新一条消息 JSON                       | 乱序比较 + 旧覆盖天数回滚的依据                                    |
-| `banner:tomb:{bannerId}`      | String | version（TTL 24h）                  | 删除墓碑，防止乱序旧消息复活已删 banner                              |
+`BannerInfo` 请求字段：
 
+| 字段 | 说明 |
+| --- | --- |
+| `bizId` | 业务线 ID，例如 `1=agri`、`2=digital` |
+| `title` / `imageUrl` / `jumpUrl` | 展示信息和点击跳转地址 |
+| `startTime` / `endTime` | ISO-8601 的本地时间，`endTime` 必须晚于 `startTime` |
+| `sort` | 升序展示，数值越小越靠前 |
+| `userIds` | CRM 请求字段，可省略或传数组；不进入 Kafka |
+| `id` / `version` | 更新、删除时使用；以 CRM 最新返回值为准 |
 
+### Redis 三 Key
 
+| Key | 类型 | 用途 |
+| --- | --- | --- |
+| `banner:{id}` | String | 保存完整消息、`version`、`deleted`、`buckets`，用于乱序判断 |
+| `banner:{bizCode}:{yyyyMMdd}` | Hash | 保存某业务线某日期的 `bannerId -> BannerMessage` 查询 Map |
+| `banner:{id}:bucketIndex:{n}` | Set | 保存第 `n` 个人群桶，每桶最多 1000 个 userId |
 
-## 消息可靠性设计（三个核心问题的解法）
+三个 Key 的过期时间都以 Banner `endTime` 所在日期的次日零点为准。`buckets=0` 表示全量可见；桶数量减少时超范围旧桶不立即删除，查询不会扫描它们，等待 TTL 自然清理。
 
-1. **消息丢失**：CRM 定时补偿任务每 5 分钟把所有"未过期" banner 全量重发到 Kafka，消费端按 version 幂等覆盖，最终一致。
-2. **insert/update 乱序**（如运维先 insert 后马上 update，但 update 消息先到）：
-  - CRM 以 `bannerId` 为 Kafka 消息 key → 同一 banner 的消息在同一分区内有序；
-  - 消息携带 `version`（毫秒时间戳），消费端只接受 version 更大的消息，迟到的旧消息直接丢弃；
-  - DELETE 写墓碑，防止乱序消息复活已删数据；定时补偿任务兜底自愈。
-3. **消息幂等**：TODO（消息体已预留 `messageId`，可基于 Redis SETNX 按 messageId 去重；当前靠 version 比对保证重复消费结果不变）。
+## 5. 快速开始
 
+以下步骤针对 Windows PowerShell。请先确认 Docker Desktop 已启动，并使用 JDK 17；PowerShell 中请求命令使用 `curl.exe`，不要使用别名 `curl`。
 
+### 5.1 启动 MySQL、Redis、Kafka
 
-## 快速开始
-
-
-
-### 0. 环境要求
-
-- JDK 17+、Maven 3.8+
-- Docker（用于一键启动 MySQL/Redis/Kafka；如果本机已有这三件中间件，可跳过并自行改 `application.yml` 中的连接配置）
-
-
-
-### 1. 启动中间件
+在项目根目录执行：
 
 ```powershell
 docker compose up -d
+docker compose ps
 ```
 
-MySQL 首次启动会自动执行 `banner-crm/src/main/resources/db/schema.sql`（建库建表 + 示例数据）。
+确认 `banner-mysql`、`banner-redis`、`banner-kafka` 都处于运行状态。MySQL 数据卷第一次创建时会自动执行 `banner-crm/src/main/resources/db/schema.sql`，其中会初始化四条业务线。
+
+如果需要完全重置本地数据：
 
 ```powershell
-# 只清理容器和网络，卷中的数据（如数据库数据、上传文件等）保留在宿主机上。
-docker compose down
-
-# 在上述基础上，额外删除 compose 文件中 volumes: 声明的命名卷和容器的匿名卷。卷内数据不可恢复。
 docker compose down -v
+docker compose up -d
+docker compose ps
 ```
 
+### 5.2 使用 JDK 17 编译
 
-
-### 2. 构建并启动两个系统
+下面的路径是示例路径；如果本机 JDK 17 安装位置不同，请替换 `JAVA_HOME`：
 
 ```powershell
+$env:JAVA_HOME="D:\develop_tools\jdk\jdk17"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+java -version
 mvn clean install -DskipTests
-mvn spring-boot:run -pl banner-crm        # 窗口 1：CRM 系统 :8081
-mvn spring-boot:run -pl banner-marketing  # 窗口 2：营销系统 :8082
 ```
 
+构建成功的判断标准是 Maven 输出 `BUILD SUCCESS`。
 
+### 5.3 启动两个 Spring Boot 服务
 
-### 3. 验证
+保持两个 PowerShell 窗口。项目配置已经把 CRM、Marketing 及中间件地址分别固定为 `8081`、`8082`、`3307`、`6379`、`9092`。
+
+窗口一：
 
 ```powershell
-# 运维：给"助农产品"创建一个 banner（当前时间起 3 天有效）
-# powershell
+$env:JAVA_HOME="D:\develop_tools\jdk\jdk17"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+mvn spring-boot:run -pl banner-crm
+```
+
+窗口二：
+
+```powershell
+$env:JAVA_HOME="D:\develop_tools\jdk\jdk17"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+mvn spring-boot:run -pl banner-marketing
+```
+
+启动日志没有连接异常后，再进行下一步。Marketing 的 Kafka consumer 使用 `earliest`，因此新建 consumer group 时可以消费已有事件。
+
+### 5.4 创建一个带定向名单的 Banner
+
+下面的示例创建 `digital` 业务线 Banner，只对 `10001`、`10002` 可见。时间窗口使用当前示例环境的日期；如果运行日期已不在窗口内，请把两个时间改成未来的有效区间。
+
+```powershell
 $body = @{
     bizId = 2
-    title = "双11预热活动"
-    imageUrl = "https://cdn.example.com/banner/double11.png"
-    jumpUrl = "https://live.douyin.com/99999"
-    startTime = "2026-09-15T00:00:00"
-    endTime = "2026-11-11T23:59:59"
+    title = "手机数码大促"
+    imageUrl = "https://cdn.example.com/banner/digital.png"
+    jumpUrl = "https://activity.example.com/digital"
+    startTime = "2026-09-20T00:00:00"
+    endTime = "2026-09-30T23:59:59"
     sort = 1
-} | ConvertTo-Json
+    userIds = @(10001, 10002)
+} | ConvertTo-Json -Compress
 
-Invoke-RestMethod `
+$result = Invoke-RestMethod `
     -Method Post `
     -Uri "http://localhost:8081/crm/banner" `
     -ContentType "application/json; charset=utf-8" `
     -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
 
-# 用户侧：查询"助农产品"此刻可见的 banner
-curl.exe "http://localhost:8082/marketing/banners?bizCode=agri"
+$result | ConvertTo-Json
+$bannerId = $result.id
+$bannerVersion = $result.version
+```
 
+响应中重点关注：
+
+- `id`：后续检查 Redis 和更新/删除时使用；
+- `version`：新建通常为 `0`，更新或删除必须使用最新版本；
+- `buckets`：两个人时为 `1`；空名单时为 `0`。
+
+### 5.5 验证“写入 → Kafka → Redis → 用户查询”
+
+等待几秒让 Outbox 投递和 Consumer 处理完成，然后执行：
+
+```powershell
+# 10001 在名单中，应返回该 Banner
+curl.exe "http://localhost:8082/marketing/banners?bizCode=digital&userId=10001"
+
+# 20001 不在名单中，应返回 []
+curl.exe "http://localhost:8082/marketing/banners?bizCode=digital&userId=20001"
+
+# 不传 userId 时，定向 Banner 不应返回；只会返回 buckets=0 的 Banner
 curl.exe "http://localhost:8082/marketing/banners?bizCode=digital"
 ```
 
-```cmd
-# cmd
-curl -X POST "http://localhost:8081/crm/banner" -H "Content-Type: application/json" -d "{\"bizId\":1,\"title\":\"助农水果节\",\"imageUrl\":\"https://cdn.example.com/banner/fruit.png\",\"jumpUrl\":\"https://live.douyin.com/99999\",\"startTime\":\"2026-09-10T00:00:00\",\"endTime\":\"2026-09-17T23:59:59\",\"sort\":1}"
+成功时，第一条响应应包含 `title`、`imageUrl`、`jumpUrl`、`sort` 等展示字段；第二、第三条在没有其他全量 Banner 时应为 `[]`。Marketing 返回的是用户侧 VO，不包含 CRM 内部名单。
+
+### 5.6 检查 Redis 三类 Key
+
+先查看业务日期。示例的 `2026-09-20` 对应 Redis 日期 `20260920`：
+
+```powershell
+# 单 Banner 状态：确认 version、deleted、buckets
+docker exec banner-redis redis-cli GET "banner:$bannerId"
+docker exec banner-redis redis-cli TTL "banner:$bannerId"
+
+# 业务日期 Hash：确认 Banner 已进入 digital 查询入口
+docker exec banner-redis redis-cli HGETALL "banner:digital:20260920"
+docker exec banner-redis redis-cli TTL "banner:digital:20260920"
+
+# 人群桶：应能看到 10001、10002
+docker exec banner-redis redis-cli SMEMBERS "banner:${bannerId}:bucketIndex:0"
+docker exec banner-redis redis-cli TTL "banner:${bannerId}:bucketIndex:0"
 ```
 
+> PowerShell 使用 `${bannerId}` 明确变量边界。也可以直接把最后两条命令中的变量替换为响应里的实际数字，例如 `banner:5:bucketIndex:0`。
 
+### 5.7 验证更新与删除的版本控制
 
-## 接口清单
+先把标题改掉。请求体必须带 `id` 和当前 `version`；局部更新未传的字段由服务保留原值。
 
-CRM（运维侧，:8081）：
+```powershell
+$updateBody = @{
+    id = $bannerId
+    version = $bannerVersion
+    title = "手机数码大促（已更新）"
+    sort = 2
+} | ConvertTo-Json -Compress
 
+$updated = Invoke-RestMethod `
+    -Method Put `
+    -Uri "http://localhost:8081/crm/banner" `
+    -ContentType "application/json; charset=utf-8" `
+    -Body ([System.Text.Encoding]::UTF8.GetBytes($updateBody))
 
-| 方法     | 路径                        | 说明                |
-| ------ | ------------------------- | ----------------- |
-| POST   | `/crm/banner`             | 新增 banner         |
-| PUT    | `/crm/banner`             | 更新 banner（发全量消息）  |
-| DELETE | `/crm/banner/{id}`        | 删除 banner         |
-| GET    | `/crm/banner/list?bizId=` | banner 列表（可按业务过滤） |
-| POST   | `/crm/business`           | 新增业务线             |
-| GET    | `/crm/business/list`      | 业务线列表             |
+$updated | ConvertTo-Json
+$bannerVersion = $updated.version
+```
 
+再删除：
 
-营销（用户侧，:8082）：
+```powershell
+curl.exe -X DELETE "http://localhost:8081/crm/banner/${bannerId}?version=$bannerVersion"
+```
 
+删除成功后，Marketing 的业务日期 Hash 会移除该 Banner；单 Banner Key 会短暂保留 `deleted=true` 和删除版本，用于拒绝迟到旧消息。
 
-| 方法  | 路径                                | 说明                                      |
-| --- | --------------------------------- | --------------------------------------- |
-| GET | `/marketing/banners?bizCode=agri` | 某业务线"此刻"可见 banner（含 jumpUrl，已按 sort 排序） |
+## 6. 接口清单
 
+### CRM（`http://localhost:8081`）
 
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/crm/banner` | 新增 Banner，可传 `userIds` |
+| `PUT` | `/crm/banner` | 更新 Banner，必须传 `id`、`version`；传 `userIds` 时替换整个人群包 |
+| `DELETE` | `/crm/banner/{id}?version={version}` | 按当前版本物理删除 Banner |
+| `GET` | `/crm/banner/list?bizId={bizId}` | 查询 CRM Banner 列表，`bizId` 可省略 |
+| `GET` | `/internal/banner-audience/{bannerId}` | Marketing 回源获取名单 |
+
+### Marketing（`http://localhost:8082`）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/marketing/banners?bizCode=digital&userId=10001` | 查询当前用户可见 Banner；`userId` 可省略 |
+
+## 7. 可靠性与已知限制
+
+已实现：
+
+- 数据库乐观锁：更新、删除通过版本条件避免并发覆盖；
+- Outbox：业务写入和事件记录在同一事务，失败事件由任务重试；
+- 版本防乱序：Marketing 以 `banner:{id}` 的版本判断旧消息；
+- 删除防复活：物理删除后 Redis 保留删除状态；
+- 大名单拆分：MySQL 和 Redis 都按 1000 条分片，Kafka 不传 userIds。
+
+当前限制：
+
+- `messageId` 的显式 Redis SETNX 去重仍是 TODO，目前依赖版本比较保证重复消费结果稳定；
+- localCache TTL 默认 30 秒，多实例场景允许短暂脏读；
+- Redis 人群桶更新不是单个 Lua/事务操作，更新期间可能短暂读到中间状态；
+- CRM 回源失败会延迟定向名单同步，后续应增加超时、重试和监控；
+- `schema.sql` 只在 MySQL 首次创建数据卷时自动执行，结构变更需手动迁移或重建数据卷。
+
+## 8. 开发与验证建议
+
+```powershell
+# 只编译，不运行服务
+mvn clean install -DskipTests
+
+# 查看中间件日志
+docker compose logs -f mysql redis kafka
+
+# 停止中间件但保留数据
+docker compose down
+```
+
+建议按以下顺序补充自动化验证：空名单全量可见、指定用户命中/未命中、1000 条边界分片、名单更新后的桶范围、并发版本冲突、DELETE 晚于旧 UPDATE、Outbox 失败重试。

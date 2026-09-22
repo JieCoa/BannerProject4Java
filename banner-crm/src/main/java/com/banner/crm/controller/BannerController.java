@@ -66,8 +66,8 @@ public class BannerController {
     }
 
     @DeleteMapping("/{id}")
-    public String delete(@PathVariable Long id) {
-        bannerService.delete(id);
+    public String delete(@PathVariable Long id, @RequestParam Long version) {
+        bannerService.delete(id, version);
         return "ok";
     }
 

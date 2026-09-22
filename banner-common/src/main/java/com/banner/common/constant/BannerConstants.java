@@ -24,20 +24,21 @@ public final class BannerConstants {
     /** Redis 缓存 key 前缀：banner:{bizCode}:{yyyyMMdd} */
     public static final String BANNER_KEY_PREFIX = "banner:";
 
-    /** 营销系统本地缓存的 tombstone（墓碑）前缀：banner:tomb:{bannerId}，防止乱序消息复活已删 banner */
-    public static final String BANNER_TOMB_PREFIX = "banner:tomb:";
-
-    /** 最新消息数据前缀：banner:data:{bannerId}，用于乱序比较与旧覆盖天数回滚 */
-    public static final String BANNER_DATA_PREFIX = "banner:data:";
-
-    /** 墓碑 TTL：超过该时长后乱序到达的消息也不可能再复活已删数据 */
-    public static final long TOMBSTONE_TTL_HOURS = 24;
-
     private static final DateTimeFormatter DAY_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    /** 拼装某业务某天的缓存 key，如 banner:agri:20260910 */
-    public static String bannerDayKey(String bizCode, LocalDate day) {
+    /** 第一个 Key：banner:{bannerId} */
+    public static String bannerKey(Long bannerId) {
+        return BANNER_KEY_PREFIX + bannerId;
+    }
+
+    /** 第二个 Key：banner:{bizCode}:{yyyyMMdd}，Hash 形式的 Banner Map */
+    public static String bannerBusinessDayKey(String bizCode, LocalDate day) {
         return BANNER_KEY_PREFIX + bizCode + ":" + DAY_FORMATTER.format(day);
+    }
+
+    /** 第三个 Key：banner:{bannerId}:bucketIndex:{n} */
+    public static String bannerBucketKey(Long bannerId, int bucketIndex) {
+        return BANNER_KEY_PREFIX + bannerId + ":bucketIndex:" + bucketIndex;
     }
 
     /** banner 生效区间 [start, end] 覆盖到的每一天 */

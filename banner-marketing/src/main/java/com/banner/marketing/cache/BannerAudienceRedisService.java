@@ -5,73 +5,77 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
-/** 用户定向名单的 Redis 分桶缓存，避免一个 banner 产生超大的单个 value。 */
+/** 用户人群包 Redis 分桶；不维护桶索引集合，桶范围由 Banner.buckets 控制。 */
 @Service
 @RequiredArgsConstructor
 public class BannerAudienceRedisService {
 
-    private static final int BUCKET_SIZE = 1000;
-    private static final String KEY_PREFIX = "banner:audience:";
+    public static final int BUCKET_SIZE = 1000;
     private final StringRedisTemplate redisTemplate;
 
-    public void replace(Long bannerId, Set<Long> userIds, long version) {
-        String indexKey = indexKey(bannerId);
-        Set<String> oldKeys = redisTemplate.opsForSet().members(indexKey);
-        if (oldKeys != null && !oldKeys.isEmpty()) {
-            redisTemplate.delete(oldKeys);
-        }
-        redisTemplate.delete(indexKey);
+    public int bucketCount(Set<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
+            return 0;
+        }
+        long count = userIds.stream().filter(java.util.Objects::nonNull).distinct().count();
+        return (int) ((count + BUCKET_SIZE - 1) / BUCKET_SIZE);
+    }
+
+    /** 按稳定顺序切桶，写入 [0, buckets) 范围。 */
+    public void writeBuckets(Long bannerId, Set<Long> userIds, int buckets, LocalDateTime endTime) {
+        if (userIds == null || userIds.isEmpty() || buckets <= 0) {
             return;
         }
-        Set<Long> distinct = new HashSet<>(userIds);
-        int bucketNo = 0;
-        Set<String> bucketKeys = new HashSet<>();
-        Set<String> bucket = new HashSet<>();
-        for (Long userId : distinct) {
-            bucket.add(String.valueOf(userId));
-            if (bucket.size() == BUCKET_SIZE) {
-                bucketKeys.add(writeBucket(bannerId, bucketNo++, bucket, version));
-                bucket.clear();
+        List<Long> ids = userIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .sorted()
+                .toList();
+        for (int bucketIndex = 0; bucketIndex < buckets; bucketIndex++) {
+            int from = bucketIndex * BUCKET_SIZE;
+            if (from >= ids.size()) {
+                break;
             }
+            int to = Math.min(from + BUCKET_SIZE, ids.size());
+            Set<String> members = new HashSet<>();
+            for (Long id : ids.subList(from, to)) {
+                members.add(String.valueOf(id));
+            }
+            String key = BannerConstants.bannerBucketKey(bannerId, bucketIndex);
+            redisTemplate.delete(key);
+            redisTemplate.opsForSet().add(key, members.toArray(String[]::new));
+            redisTemplate.expireAt(key, expireAt(endTime));
         }
-        if (!bucket.isEmpty()) {
-            bucketKeys.add(writeBucket(bannerId, bucketNo, bucket, version));
-        }
-        redisTemplate.opsForSet().add(indexKey, bucketKeys.toArray(String[]::new));
-        redisTemplate.expire(indexKey, Duration.ofDays(2));
     }
 
-    public boolean hasAudience(Long bannerId) {
-        Set<String> keys = redisTemplate.opsForSet().members(indexKey(bannerId));
-        return keys != null && !keys.isEmpty();
-    }
-
-    public boolean contains(Long bannerId, Long userId) {
-        Set<String> keys = redisTemplate.opsForSet().members(indexKey(bannerId));
-        if (keys == null) {
+    /** 查询时只扫描有效桶，超出 buckets 的懒删除桶不可见。 */
+    public boolean contains(Long bannerId, Long userId, int buckets) {
+        if (userId == null || buckets <= 0) {
             return false;
         }
-        for (String key : keys) {
-            if (Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(key, String.valueOf(userId)))) {
+        String member = String.valueOf(userId);
+        for (int bucketIndex = 0; bucketIndex < buckets; bucketIndex++) {
+            if (Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(
+                    BannerConstants.bannerBucketKey(bannerId, bucketIndex), member))) {
                 return true;
             }
         }
         return false;
     }
 
-    private String writeBucket(Long bannerId, int bucketNo, Set<String> userIds, long version) {
-        String key = KEY_PREFIX + bannerId + ":bucketIndx:" + bucketNo;
-        redisTemplate.opsForSet().add(key, userIds.toArray(String[]::new));
-        redisTemplate.expire(key, Duration.ofDays(2));
-        return key;
+    /** 删除场景不主动清理桶，统一交给第三类 Key 的 TTL 自然过期。 */
+    public void retainForLazyExpiry(Long bannerId, int buckets) {
+        // 保留显式方法表达 Consumer 删除分支不回源、不重建、不删除桶的语义。
     }
 
-    private String indexKey(Long bannerId) {
-        return KEY_PREFIX + bannerId + ":buckets";
+    private java.util.Date expireAt(LocalDateTime endTime) {
+        return java.util.Date.from(endTime.toLocalDate().plusDays(1)
+                .atStartOfDay(com.banner.common.constant.BannerConstants.SHANGHAI).toInstant());
     }
 }

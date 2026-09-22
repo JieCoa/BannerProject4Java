@@ -40,6 +40,24 @@ CREATE TABLE IF NOT EXISTS banner_user_shard (
     KEY idx_banner_user_shard_banner (banner_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS banner_change_outbox (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    event_id VARCHAR(64) NOT NULL,
+    banner_id BIGINT NOT NULL,
+    operate_type VARCHAR(16) NOT NULL,
+    version BIGINT NOT NULL,
+    payload JSON NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    retry_count INT NOT NULL DEFAULT 0,
+    next_retry_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_outbox_event_id (event_id),
+    UNIQUE KEY uk_outbox_banner_version (banner_id, version),
+    KEY idx_outbox_pending (status, next_retry_time)
+) ENGINE=InnoDB COMMENT='Banner变更事件Outbox';
+
 INSERT IGNORE INTO business_info (id, biz_code, biz_name, description) VALUES
     (1, 'agri', '助农产品', '农产品助农专区'),
     (2, 'digital', '手机数码', '手机数码专区'),

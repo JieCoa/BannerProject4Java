@@ -13,14 +13,11 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
-/**
- * 用户侧 banner 查询服务。
- * <p>
- * 三级查询链路：localCache -> Redis -> （miss 时返回空列表，由 CRM 补偿任务保证最终有数据）。
- * "用户在某一天能看到的 banner 集合" = 该业务线当天 key 的 Hash 全量，再按当前时刻过滤。
- */
+/** 用户侧查询：localCache 缓存业务日期 Map，查询时再按时间和 userId 过滤。 */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -30,45 +27,43 @@ public class BannerQueryService {
     private final BannerAudienceRedisService audienceRedisService;
     private final LocalCache localCache;
 
-    /** 查询某业务线 "此刻" 可见的 banner 列表（已按 sort 升序） */
     public List<BannerVO> listVisibleBanners(String bizCode, Long userId) {
         LocalDate today = LocalDate.now(BannerConstants.SHANGHAI);
-        // 用户定向结果不能共用同一个本地缓存 key，否则一个用户的结果可能泄露给另一个用户
-        String localKey = BannerRedisService.localKey(bizCode, today) + ":user:" + (userId == null ? "anonymous" : userId);
-
-        // 1. 本地缓存命中直接返回（微秒级，扛住高并发）
-        List<BannerVO> cached = localCache.get(localKey);
-        if (cached != null) {
-            log.debug("localCache 命中 key={}", localKey);
-            return cached;
+        String localKey = BannerConstants.bannerBusinessDayKey(bizCode, today);
+        Map<Long, BannerMessage> bannerMap = localCache.get(localKey);
+        if (bannerMap == null) {
+            bannerMap = loadBusinessMap(bizCode, today);
+            localCache.put(localKey, bannerMap);
         }
-
-        // 2. 回源 Redis
-        List<BannerVO> result = loadFromRedis(bizCode, today, userId);
-
-        // 3. 最新查询结果放入 localCache
-        localCache.put(localKey, result);
-        return result;
+        return filterVisible(bannerMap, userId);
     }
 
-    private List<BannerVO> loadFromRedis(String bizCode, LocalDate today, Long userId) {
-        LocalDateTime now = LocalDateTime.now(BannerConstants.SHANGHAI);
+    private Map<Long, BannerMessage> loadBusinessMap(String bizCode, LocalDate day) {
         try {
-            return bannerRedisService.loadDay(bizCode, today).stream()
-                    // 先按当前时间筛选，再按 userId 过滤定向 banner；名单为空表示所有用户可见
-                    .filter(msg -> !now.isBefore(msg.getStartTime()) && !now.isAfter(msg.getEndTime()))
-                    .filter(msg -> userId == null || !audienceRedisService.hasAudience(msg.getId())
-                            || audienceRedisService.contains(msg.getId(), userId))
-                    // nullsLast() 表示如果 sort 是 null，把它放到最后；naturalOrder() 表示使用自然顺序
-                    .sorted(Comparator.comparing(BannerMessage::getSort,
-                            Comparator.nullsLast(Comparator.naturalOrder())))
-                    .map(msg -> new BannerVO(msg.getId(), msg.getTitle(), msg.getImageUrl(),
-                            msg.getJumpUrl(), msg.getSort()))
-                    .toList();
+            List<BannerMessage> messages = bannerRedisService.loadBusinessDay(bizCode, day);
+            Map<Long, BannerMessage> result = new LinkedHashMap<>();
+            for (BannerMessage message : messages) {
+                result.put(message.getId(), message);
+            }
+            return result;
         } catch (Exception e) {
-            log.error("查询 Redis 缓存失败 bizCode={}", bizCode, e);
-            // 创建的是一个不可修改的空列表
-            return List.of();
+            log.error("查询 Redis Banner Map 失败 bizCode={} day={}", bizCode, day, e);
+            return Map.of();
         }
+    }
+
+    private List<BannerVO> filterVisible(Map<Long, BannerMessage> bannerMap, Long userId) {
+        LocalDateTime now = LocalDateTime.now(BannerConstants.SHANGHAI);
+        return bannerMap.values().stream()
+                .filter(message -> !now.isBefore(message.getStartTime())
+                        && !now.isAfter(message.getEndTime()))
+                .filter(message -> message.getBuckets() == null || message.getBuckets() == 0
+                        || (userId != null && audienceRedisService.contains(
+                                message.getId(), userId, message.getBuckets())))
+                .sorted(Comparator.comparing(BannerMessage::getSort,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(message -> new BannerVO(message.getId(), message.getTitle(),
+                        message.getImageUrl(), message.getJumpUrl(), message.getSort()))
+                .toList();
     }
 }
